@@ -25,6 +25,17 @@ Parameters:
     Type: Number
     Default: 256
     Description: 'Memory size for the Lambda function in MB (default: 256MB)'
+    
+  CreateSQSNotifications:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: 'Whether to create SQS queue for S3 notifications (default: true)'
+
+Conditions:
+  CreateSQSResources: !Equals [!Ref CreateSQSNotifications, 'true']
 
 Resources:
   # DynamoDB Table for storing log group configurations
@@ -56,10 +67,12 @@ Resources:
             Transitions:
               - TransitionInDays: 90
                 StorageClass: GLACIER
-      NotificationConfiguration:
-        QueueConfigurations:
-          - Event: s3:ObjectCreated:*
-            Queue: !GetAtt LogExportNotificationQueue.Arn
+      NotificationConfiguration: !If
+        - CreateSQSResources
+        - QueueConfigurations:
+            - Event: s3:ObjectCreated:*
+              Queue: !GetAtt LogExportNotificationQueue.Arn
+        - !Ref AWS::NoValue
 
   # S3 Bucket Policy
   LogsExportBucketPolicy:
@@ -78,17 +91,19 @@ Resources:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
 
-  # SQS Queue for S3 notifications
+  # SQS Queue for S3 notifications - only created if CreateSQSNotifications is true
   LogExportNotificationQueue:
     Type: AWS::SQS::Queue
+    Condition: CreateSQSResources
     Properties:
       QueueName: !Sub '${AWS::StackName}-log-export-notifications'
       VisibilityTimeout: 300
       MessageRetentionPeriod: 1209600  # 14 days in seconds
 
-  # SQS Queue Policy
+  # SQS Queue Policy - only created if CreateSQSNotifications is true
   LogExportQueuePolicy:
     Type: AWS::SQS::QueuePolicy
+    Condition: CreateSQSResources
     Properties:
       Queues:
         - !Ref LogExportNotificationQueue
@@ -195,10 +210,12 @@ Outputs:
     Value: !Ref LogsExportBucket
     
   LogExportNotificationQueueURL:
+    Condition: CreateSQSResources
     Description: 'SQS queue URL for S3 notifications'
     Value: !Ref LogExportNotificationQueue
     
   LogExportNotificationQueueARN:
+    Condition: CreateSQSResources
     Description: 'SQS queue ARN for S3 notifications'
     Value: !GetAtt LogExportNotificationQueue.Arn
     

@@ -9,6 +9,7 @@ EXPORT_TIME_RANGE_MINUTES=1440
 LAMBDA_TIMEOUT=300
 LAMBDA_MEMORY_SIZE=256
 REGION=$(aws configure get region || echo "us-east-1")
+CREATE_SQS_NOTIFICATIONS="true"
 
 # Help message
 display_help() {
@@ -21,6 +22,7 @@ display_help() {
     echo "  -l, --lambda-timeout SECONDS Lambda timeout in seconds (default: 300)"
     echo "  -m, --memory SIZE            Lambda memory in MB (default: 256)"
     echo "  -r, --region REGION          AWS region (default: from AWS config)"
+    echo "  -q, --sqs-notifications      Create SQS notifications (true/false, default: true)"
     echo "  -h, --help                   Display this help message"
     exit 1
 }
@@ -53,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             REGION="$2"
             shift 2
             ;;
+        -q|--sqs-notifications)
+            CREATE_SQS_NOTIFICATIONS="$2"
+            shift 2
+            ;;
         -h|--help)
             display_help
             ;;
@@ -69,6 +75,12 @@ if [ -z "$S3_BUCKET_NAME" ]; then
     display_help
 fi
 
+# Validate SQS notifications parameter
+if [[ "$CREATE_SQS_NOTIFICATIONS" != "true" && "$CREATE_SQS_NOTIFICATIONS" != "false" ]]; then
+    echo "Error: SQS notifications must be either 'true' or 'false'"
+    display_help
+fi
+
 # Set AWS region
 export AWS_DEFAULT_REGION=$REGION
 
@@ -79,6 +91,7 @@ echo "Schedule: $SCHEDULE_EXPRESSION"
 echo "Export Time Range: $EXPORT_TIME_RANGE_MINUTES minutes"
 echo "Lambda Timeout: $LAMBDA_TIMEOUT seconds"
 echo "Lambda Memory: $LAMBDA_MEMORY_SIZE MB"
+echo "Create SQS Notifications: $CREATE_SQS_NOTIFICATIONS"
 echo "Region: $REGION"
 echo ""
 
@@ -100,7 +113,8 @@ aws cloudformation deploy \
     ScheduleExpression="$SCHEDULE_EXPRESSION" \
     ExportTimeRangeMinutes=$EXPORT_TIME_RANGE_MINUTES \
     LambdaTimeout=$LAMBDA_TIMEOUT \
-    LambdaMemorySize=$LAMBDA_MEMORY_SIZE
+    LambdaMemorySize=$LAMBDA_MEMORY_SIZE \
+    CreateSQSNotifications=$CREATE_SQS_NOTIFICATIONS
 
 # 2. Get Lambda function name from stack outputs
 echo "Getting Lambda function name from stack outputs..."
@@ -141,5 +155,5 @@ aws lambda update-function-code \
 echo ""
 echo "=== Deployment Complete ==="
 echo ""
-echo "To add a log group to export, run:"
+echo "To add log groups to export, run:"
 echo "python src/add_log_group.py ${STACK_NAME}-log-configs"
