@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudWatch Logs Export to S3 with EventBridge Schedule'
+
+Parameters:
+  ScheduleExpression:
+    Type: String
+    Default: 'rate(1 day)'
+    Description: 'EventBridge schedule expression for when to run the export (default: daily)'
+
+  ExportTimeRangeMinutes:
+    Type: Number
+    Default: 1440
+    Description: 'Time range in minutes for the logs to export (default: 1440 minutes = 24 hours)'
+
+  S3BucketName:
+    Type: String
+    Description: 'Name for the S3 bucket where logs will be exported'
+
+  LambdaTimeout:
+    Type: Number
+    Default: 300
+    Description: 'Timeout for the Lambda function in seconds (default: 5 minutes)'
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 256
+    Description: 'Memory size for the Lambda function in MB (default: 256MB)'
+
+Resources:
+  # DynamoDB Table for storing log group configurations
+  LogGroupConfigTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AWS::StackName}-log-configs'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: logGroupName
+          AttributeType: S
+      KeySchema:
+        - AttributeName: logGroupName
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  # S3 Bucket for storing exported logs
+  LogsExportBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToGlacier
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: s3:ObjectCreated:*
+            Queue: !GetAtt LogExportNotificationQueue.Arn
+
+  # S3 Bucket Policy
+  LogsExportBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LogsExportBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: logs.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub 'arn:aws:s3:::${LogsExportBucket}/*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  # SQS Queue for S3 notifications
+  LogExportNotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-log-export-notifications'
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600  # 14 days in seconds
+
+  # SQS Queue Policy
+  LogExportQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref LogExportNotificationQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt LogExportNotificationQueue.Arn
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:aws:s3:::${LogsExportBucket}'
+
+  # Lambda IAM Role
+  LogExportLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LogExportPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateExportTask
+                  - logs:DescribeExportTasks
+                  - logs:CancelExportTask
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub 'arn:aws:s3:::${LogsExportBucket}/*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:GetItem
+                Resource: !GetAtt LogGroupConfigTable.Arn
+
+  # Lambda Function
+  LogExportLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-log-export'
+      Runtime: python3.9
+      Handler: index.handler
+      Role: !GetAtt LogExportLambdaRole.Arn
+      Timeout: !Ref LambdaTimeout
+      MemorySize: !Ref LambdaMemorySize
+      Environment:
+        Variables:
+          LOGS_CONFIG_TABLE_NAME: !Ref LogGroupConfigTable
+          EXPORT_TIME_RANGE_MINUTES: !Ref ExportTimeRangeMinutes
+      Code:
+        ZipFile: |
+          # This is a placeholder - the actual Lambda code will be deployed separately
+          import json
+
+          def handler(event, context):
+              print('Lambda function code needs to be deployed separately')
+              return {
+                  'statusCode': 500,
+                  'body': json.dumps('Lambda code not deployed')
+              }
+
+  # EventBridge Rule (CloudWatch Events)
+  LogExportScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${AWS::StackName}-scheduled-export'
+      Description: 'Scheduled rule to trigger CloudWatch logs export to S3'
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Id: LogExportLambdaTarget
+          Arn: !GetAtt LogExportLambda.Arn
+
+  # EventBridge Permission to invoke Lambda
+  LogExportLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LogExportLambda
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt LogExportScheduledRule.Arn
+
+Outputs:
+  LogGroupConfigTableName:
+    Description: 'DynamoDB table for log group configurations'
+    Value: !Ref LogGroupConfigTable
+    
+  LogsExportBucketName:
+    Description: 'S3 bucket for exported CloudWatch logs'
+    Value: !Ref LogsExportBucket
+    
+  LogExportNotificationQueueURL:
+    Description: 'SQS queue URL for S3 notifications'
+    Value: !Ref LogExportNotificationQueue
+    
+  LogExportNotificationQueueARN:
+    Description: 'SQS queue ARN for S3 notifications'
+    Value: !GetAtt LogExportNotificationQueue.Arn
+    
+  LogExportLambdaARN:
+    Description: 'Lambda function ARN'
+    Value: !GetAtt LogExportLambda.Arn
