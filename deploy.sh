@@ -10,6 +10,7 @@ LAMBDA_TIMEOUT=300
 LAMBDA_MEMORY_SIZE=256
 REGION=$(aws configure get region || echo "us-east-1")
 CREATE_SQS_NOTIFICATIONS="true"
+AWS_PROFILE=""
 
 # Help message
 display_help() {
@@ -23,6 +24,7 @@ display_help() {
     echo "  -m, --memory SIZE            Lambda memory in MB (default: 256)"
     echo "  -r, --region REGION          AWS region (default: from AWS config)"
     echo "  -q, --sqs-notifications      Create SQS notifications (true/false, default: true)"
+    echo "  -p, --profile PROFILE        AWS CLI profile to use"
     echo "  -h, --help                   Display this help message"
     exit 1
 }
@@ -59,6 +61,10 @@ while [[ $# -gt 0 ]]; do
             CREATE_SQS_NOTIFICATIONS="$2"
             shift 2
             ;;
+        -p|--profile)
+            AWS_PROFILE="$2"
+            shift 2
+            ;;
         -h|--help)
             display_help
             ;;
@@ -81,7 +87,13 @@ if [[ "$CREATE_SQS_NOTIFICATIONS" != "true" && "$CREATE_SQS_NOTIFICATIONS" != "f
     display_help
 fi
 
-# Set AWS region
+# Set up AWS CLI profile and region
+PROFILE_OPTION=""
+if [ -n "$AWS_PROFILE" ]; then
+    PROFILE_OPTION="--profile $AWS_PROFILE"
+    echo "Using AWS profile: $AWS_PROFILE"
+fi
+
 export AWS_DEFAULT_REGION=$REGION
 
 echo "=== CloudWatch Logs Export Deployment ==="
@@ -104,7 +116,7 @@ fi
 
 # 1. Deploy CloudFormation Template
 echo "Deploying CloudFormation stack..."
-aws cloudformation deploy \
+aws $PROFILE_OPTION cloudformation deploy \
   --template-file template/cloudformation.yaml \
   --stack-name $STACK_NAME \
   --capabilities CAPABILITY_IAM \
@@ -118,7 +130,7 @@ aws cloudformation deploy \
 
 # 2. Get Lambda function name from stack outputs
 echo "Getting Lambda function name from stack outputs..."
-LAMBDA_FUNCTION_NAME=$(aws cloudformation describe-stacks \
+LAMBDA_FUNCTION_NAME=$(aws $PROFILE_OPTION cloudformation describe-stacks \
   --stack-name $STACK_NAME \
   --query "Stacks[0].Outputs[?OutputKey=='LogExportLambdaARN'].OutputValue" \
   --output text | cut -d':' -f7)
@@ -148,7 +160,7 @@ cd ..
 
 # Update Lambda function code
 echo "Updating Lambda function code..."
-aws lambda update-function-code \
+aws $PROFILE_OPTION lambda update-function-code \
   --function-name $LAMBDA_FUNCTION_NAME \
   --zip-file fileb://lambda-function.zip
 
@@ -156,4 +168,8 @@ echo ""
 echo "=== Deployment Complete ==="
 echo ""
 echo "To add log groups to export, run:"
-echo "python src/add_log_group.py ${STACK_NAME}-log-configs"
+if [ -n "$AWS_PROFILE" ]; then
+    echo "AWS_PROFILE=$AWS_PROFILE python src/add_log_group.py ${STACK_NAME}-log-configs"
+else
+    echo "python src/add_log_group.py ${STACK_NAME}-log-configs"
+fi

@@ -33,7 +33,8 @@ chmod +x deploy.sh
   --lambda-timeout 600 \
   --memory 512 \
   --region us-west-2 \
-  --sqs-notifications false
+  --sqs-notifications false \
+  --profile my-aws-profile
 ```
 
 Alternatively, you can deploy manually with the CloudFormation template:
@@ -62,6 +63,9 @@ chmod +x src/add_log_group.py
 
 # Run the script with the DynamoDB table name
 python src/add_log_group.py cloudwatch-logs-export-log-configs
+
+# If using an AWS profile
+AWS_PROFILE=my-aws-profile python src/add_log_group.py cloudwatch-logs-export-log-configs
 ```
 
 The script will:
@@ -117,3 +121,4 @@ When deploying, you can adjust these parameters:
 | LambdaTimeout | Timeout for the Lambda function in seconds | 300 |
 | LambdaMemorySize | Memory size for the Lambda function in MB | 256 |
 | CreateSQSNotifications | Whether to create SQS queue for S3 notifications | true |
+| AWS Profile | AWS CLI profile to use | (default from AWS config) |
